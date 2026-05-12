@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Secrets
+.env
+
+# Runtime data
+data/
+notebooks/data/
+
+# Editor / IDE
+.history/
+.claude/settings.local.json
