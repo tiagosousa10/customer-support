@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     openai_api_key : str =""
     google_api_key : str =""
 
-    workspace_dir : Path = Path(__file__).resolve().parent[2]
+    workspace_dir : Path = Path(__file__).resolve().parents[2]
     data_dir: Path = Path("data")
     db_path: Path = Path("data/support.db")
     chroma_rag_dir: Path = Path("data/chroma_rag")

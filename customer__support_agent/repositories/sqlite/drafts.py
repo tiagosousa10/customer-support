@@ -33,8 +33,8 @@ class DraftsRepository:
                 SELECT * FROM drafts WHERE ticket_id = ?
                 ORDER BY created_at DESC
                 LIMIT 1
-                """
-                (ticket_id,)
+                """,
+                (ticket_id,),
             ).fetchone()
             return row_to_dict(row)
 
@@ -87,7 +87,7 @@ class DraftsRepository:
                     t.status AS ticket_status,
                     c.id AS customer_id,
                     c.email AS customer_email,
-                    c.name AS customer_name
+                    c.name AS customer_name,
                     c.company AS customer_company
                 FROM drafts d
                 JOIN tickets t ON d.ticket_id = t.id

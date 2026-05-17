@@ -31,7 +31,7 @@ class CustomersRepository:
                      f"UPDATE customers SET {','.join(updates)} WHERE email = ?", values
                     )
                 refreshed = conn.execute(
-                    "SELECT * FROM customers WHERE email = ?"
+                    "SELECT * FROM customers WHERE email = ?", (email,)
                 ).fetchone()
 
                 return row_to_dict(refreshed) or {}

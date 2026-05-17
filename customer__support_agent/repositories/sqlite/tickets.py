@@ -30,7 +30,7 @@ class TicketsRepository:
             rows = conn.execute(
                 """
                 SELECT
-                    t.*
+                    t.*,
                     c.email AS customer_email,
                     c.name AS customer_name,
                     c.company AS customer_company
