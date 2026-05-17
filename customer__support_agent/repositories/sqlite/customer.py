@@ -48,7 +48,14 @@ class CustomersRepository:
 
 
     def get_by_id(self,customer_id:int) -> dict[str, Any] | None:
-        pass
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM customers WHERE id = ?", (customer_id,)
+            ).fetchone()
+            return row_to_dict(row)
 
     def get_by_email(self,email:str) -> dict[str, Any] | None:
-        pass
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM customers WHERE email = ?", (email,)).fetchone()
+            return row_to_dict(row)
