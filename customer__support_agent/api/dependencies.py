@@ -3,7 +3,7 @@ from functools import lru_cache
 from fastapi import Depends, HTTPException
 
 from customer__support_agent.core.settings import get_settings, Settings
-from customer__support_agent.repositories.sqlite.customers import CustomersRepository
+from customer__support_agent.repositories.sqlite.customer import CustomersRepository
 from customer__support_agent.repositories.sqlite.drafts import DraftsRepository
 from customer__support_agent.repositories.sqlite.tickets import TicketsRepository
 from customer__support_agent.services.copilot_service import SupportCopilot

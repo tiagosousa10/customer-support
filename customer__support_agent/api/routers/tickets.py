@@ -35,7 +35,7 @@ def _generate_and_store_draft_background(
         ticket_id=ticket_id,
         tickets_repo=tickets_repo,
         customers_repo=customers_repo,
-        drafts_repo=drafts_repo
+        drafts_repo=drafts_repo,
         copilot_factory=get_copilot,
         logger=logger
     )

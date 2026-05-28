@@ -26,7 +26,7 @@ class CustomerMemoryStore:
             "vector_store": {
                 "provider": "chroma",
                 "config": {
-                    "path": str(settings.chroma_mem0_path()),
+                    "path": str(settings.chroma_mem0_path),
                 }
             }
         }
@@ -59,16 +59,12 @@ class CustomerMemoryStore:
         self._memory = Memory.from_config(config)
 
     def search(self, query:str,user_id:str,limit:int = 5) -> list[dict[str,Any]]:
-        try:
-            raw = self._memory.search(query=query, user_id=user_id, limit=limit)
-        except TypeError:
-            raw = self._memory.search(query=query, user_id=user_id)
+        raw = self._memory.search(query=query, filters={"user_id": user_id}, top_k=limit)
         return self._normalize_results(raw,limit)
 
     def list_memories(self, user_id:str, limit:int = 20) -> list[dict[str,Any]]:
-        if hasattr(self._memory, "get_all"):
-            raw = self._memory.get_all(user_id=user_id)
-            return self._normalize_results(raw,limit)
+        raw = self._memory.get_all(filters={"user_id": user_id}, top_k=limit)
+        return self._normalize_results(raw,limit)
 
 
     def add_interaction(
@@ -78,7 +74,7 @@ class CustomerMemoryStore:
         assistant_response:str,
         metadata: dict[str,Any] | None = None,
     ) -> None:
-        messages: [
+        messages = [
             {"role": "user", "content": user_input},
             {"role": "assistant", "content": assistant_response},
         ]
@@ -121,10 +117,7 @@ class CustomerMemoryStore:
         user_id:str,
         metadata: dict[str,Any] | None = None,
     ) -> None:
-        try:
-            self._memory.add_messages(messages=messages, user_id=user_id, metadata=metadata or {})
-        except TypeError:
-            self._memory.add(messages=messages, user_id=user_id, metadata=metadata or {})
+        self._memory.add(messages=messages, user_id=user_id, metadata=metadata or {})
 
 
 

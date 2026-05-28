@@ -66,7 +66,7 @@ def ensure_directories(settings: Settings | None = None) -> None:
 
     for path in(
         config.resolve(config.data_dir),
-        config.chroma_rag_path,
+        config.chroma_rag_path(),
         config.chroma_mem0_path,
         config.knowledge_base_path,
     ) :

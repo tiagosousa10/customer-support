@@ -42,7 +42,7 @@ class KnowledgeBaseService:
 
             for index,chunk in enumerate(chunks):
                 chunk_hash = hashlib.sha1(chunk.encode("utf-8")).hexdigest()[:10]
-                doc_id: f"{file_path.stem}-{index}-{chunk_hash}"
+                doc_id = f"{file_path.stem}-{index}-{chunk_hash}"
                 docs.append(chunk)
                 ids.append(doc_id)
                 metadatas.append(
@@ -73,7 +73,7 @@ class KnowledgeBaseService:
 
         results = self._collection.query(
             query_texts=[query],
-            n_results=top_k or self._settings.rag_top_k
+            n_results=top_k or self._settings.rag_top_k,
             include=["documents", "metadatas","distances"]
         )
 
@@ -82,7 +82,7 @@ class KnowledgeBaseService:
         distances = (results.get("distances") or [[]])[0]
 
         combined: list[dict[str,Any]] = []
-        for i, document in enumerate[documents]:
+        for i, document in enumerate(documents):
             metadata = metadatas[i] if i < len(metadatas) else {}
             distance = distances[i] if i < len(distances) else None
             combined.append(

@@ -28,10 +28,10 @@ def _load_band(open_count:int) -> str:
 def lookup_customer_plan(customer_email:str) -> str:
     """Return structured subscription and SLA details for a customer email."""
     plans = [
-        {"plan_tier": "free", "sla_hours": 48, "prioriy_queue": False},
-        {"plan_tier": "starter", "sla_hours": 24, "prioriy_queue": False},
-        {"plan_tier": "pro", "sla_hours": 8, "prioriy_queue": True},
-        {"plan_tier": "enterprise", "sla_hours": 1, "prioriy_queue": True},
+        {"plan_tier": "free", "sla_hours": 48, "priority_queue": False},
+        {"plan_tier": "starter", "sla_hours": 24, "priority_queue": False},
+        {"plan_tier": "pro", "sla_hours": 8, "priority_queue": True},
+        {"plan_tier": "enterprise", "sla_hours": 1, "priority_queue": True},
     ]
     plan = plans[_stable_bucket(customer_email, len(plans))]
     summary = (
@@ -49,43 +49,44 @@ def lookup_customer_plan(customer_email:str) -> str:
         )
     })
 
-
+@tool
 def lookup_open_ticket_load(customer_email:str) -> str:
-        customers_repo = CustomersRepository()
-        tickets_repo = TicketsRepository()
+    """Return open ticket count and load band for a customer email."""
+    customers_repo = CustomersRepository()
+    tickets_repo = TicketsRepository()
 
-        customer = customers_repo.get_by_email(customer_email)
-        if not customer:
-            return _json({
-                "tool": "lookup_open_ticket_load",
-                "customer_email": customer_email,
-                "summary":f"No Customer record found for {customer_email}",
-                "details": {
-                    "customer_found": False,
-                    "open_tickets": None,
-                    "load_band": "unknown"
-                },
-                "recommended_action": "Ask agent to verify customer email before promissing SLA."
-                }
-            )
-
-        open_count = tickets_repo.count_open_for_customer(customer_email)
-
-        return _json(
-            {
-                "tool": "lookup_open_ticket_load",
-                "customer_email": customer_email,
-                "summary":f"Customer {customer_email} has {open_count} open tickets.",
-                "details": {
-                    "customer_found": True,
-                    "open_tickets": open_count,
-                    "load_band": _load_band(open_count),
+    customer = customers_repo.get_by_email(customer_email)
+    if not customer:
+        return _json({
+            "tool": "lookup_open_ticket_load",
+            "customer_email": customer_email,
+            "summary":f"No Customer record found for {customer_email}",
+            "details": {
+                "customer_found": False,
+                "open_tickets": None,
+                "load_band": "unknown"
             },
-                "recommended_action": (
-                    "Acknowledge multiple ongoing issues." if open_count > 1 else "Acknowledge one ongoing issue."
-                )
+            "recommended_action": "Ask agent to verify customer email before promissing SLA."
             }
         )
+
+    open_count = tickets_repo.count_open_for_customer(customer_email)
+
+    return _json(
+        {
+            "tool": "lookup_open_ticket_load",
+            "customer_email": customer_email,
+            "summary":f"Customer {customer_email} has {open_count} open tickets.",
+            "details": {
+                "customer_found": True,
+                "open_tickets": open_count,
+                "load_band": _load_band(open_count),
+        },
+            "recommended_action": (
+                "Acknowledge multiple ongoing issues." if open_count > 1 else "Acknowledge one ongoing issue."
+            )
+        }
+    )
 
 
 def get_support_tools() -> list:

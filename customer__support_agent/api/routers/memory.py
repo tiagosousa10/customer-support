@@ -38,7 +38,7 @@ def customer_memories_route(
     }
 
 
-@router.get("/api/customers/{customer_id}/memory-search", response_model=CustomerMemorySearchResponse):
+@router.get("/api/customers/{customer_id}/memory-search", response_model=CustomerMemorySearchResponse)
 def customer_memory_search_route(
     customer_id:int,
     query:str,
