@@ -38,6 +38,7 @@ class DraftService:
             "subject": ticket["subject"],
             "description": ticket["description"],
             "priority": ticket["priority"],
+            "status": ticket["status"],
             "created_at": ticket["created_at"],
             "updated_at": ticket["updated_at"],
         }
@@ -57,13 +58,40 @@ class DraftService:
     def generate_and_store_background(
         self,
         ticket_id:int,
-        tickets_repoo: TicketsRepository,
+        tickets_repo: TicketsRepository,
         customers_repo: CustomersRepository,
         drafts_repo: DraftsRepository,
         copilot_factory: Callable[[], SupportCopilot],
         logger: logging.Logger,
     ) -> dict[str,Any] | None:
-        pass #will get implemented
+        ticket = tickets_repo.get_by_id(ticket_id=ticket_id)
+        if not ticket:
+            return None
+        customer = customers_repo.get_by_id(ticket["customer_id"])
+        if not customer:
+            return None
+
+        try:
+            copilot = copilot_factory()
+            result = copilot.generate_draft(ticket=ticket, customer=customer)
+            draft_text, context = self._normalize_draft_result(result)
+            return drafts_repo.create(
+                ticket_id=ticket_id,
+                content=draft_text,
+                context_used=json.dumps(context),
+                status="pending",
+            )
+        except Exception as exc:
+            logger.error(f"Background draft generation failed for ticket {ticket_id}")
+            return drafts_repo.create(
+             ticket_id=ticket_id,
+             content=(
+                 "Automatic draft generation failed. Configure AI Keys and trigger"
+                 "manual draft generation"
+             ),
+             context_used=json.dumps(self._failed_context(str(exc))),
+             status="failed",
+            )
 
     def generate_and_store_manual(
         self,
@@ -73,10 +101,17 @@ class DraftService:
         drafts_repo: DraftsRepository,
         copilot: SupportCopilot,
     ) -> dict[str,Any]:
-        pass #will get implemented
+        result = copilot.generate_draft(ticket=ticket, customer=customer)
+        draft_text, context = self._normalize_draft_result(result)
+        return drafts_repo.create(
+            ticket_id=ticket_id,
+            content=draft_text,
+            context_used=json.dumps(context),
+            status="pending",
+        )
 
 
-    def _normalize_draft_result(self, result: dict[str,Any]) -> tuple(str,dict[str,Any]):
+    def _normalize_draft_result(self, result: dict[str,Any]) -> tuple[str, dict[str,Any]]:
         draft_text = str(result.get("draft") or "").strip()
         context = result.get("context_used") or {}
         if not isinstance(context, dict):

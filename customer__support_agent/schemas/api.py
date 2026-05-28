@@ -20,6 +20,7 @@ class TicketResponse(BaseModel):
     subject: str
     description: str
     priority: str
+    status: str
     created_at:str
     updated_at:str
 
