@@ -20,6 +20,18 @@ class KnowledgeBaseService:
             chunk_overlap=settings.rag_chunk_overlap
         )
 
+    def _build_embedding_function(self) -> Any:
+        if self._settings.google_api_key:
+            os.environ.setdefault("GOOGLE_API_KEY", self._settings.google_api_key)
+            try:
+                return embedding_functions.GoogleGenaiEmbeddingFunction(
+                    model_name = self._settings.effective_google_embedding_model
+                )
+            except Exeception as exc:
+                raise RuntimeError(
+                    "Gemini embedding initialization failed. Install `google-genai ` and verify Google API key."
+                ) from exc
+
     def ingest_directory(self, directory: Path, clear_existing:bool = False) -> dict[str, Any]:
         if clear_existing:
             self._client.delete_collection(name=self._collection_name)
