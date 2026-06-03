@@ -1,6 +1,12 @@
 services:
   api:
     build: .
+    # Tag the built image explicitly so the dashboard service can reuse it
+    # instead of building a second, byte-identical copy (the two services
+    # differ only by their `command:`). Building once roughly halves disk
+    # usage on the EC2 host and was the cause of the "no space left on
+    # device" failure during the dashboard image export.
+    image: customer_support_agent:latest
     container_name: support-copilot_api
     command: uv run python main.py
     ports:
@@ -12,7 +18,10 @@ services:
       - ./knowledge_base:/app/knowledge_base
 
   dashboard:
-    build: .
+    # Reuse the image built by the `api` service (same Dockerfile) rather
+    # than rebuilding. `depends_on` guarantees `api` is created first, so the
+    # tag already exists locally and no rebuild/pull happens here.
+    image: customer_support_agent:latest
     container_name: support-copilot_dashboard
     command: uv run streamlit run app.py --server.address 0.0.0.0 --server.port 8501
     ports:
