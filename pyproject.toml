@@ -21,3 +21,8 @@ dependencies = [
     "google-genai",
 
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
