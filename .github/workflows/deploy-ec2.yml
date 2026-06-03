@@ -136,13 +136,22 @@ jobs:
           fi
 
           if ! command -v docker >/dev/null 2>&1; then
-            echo "Docker not found. Installing Docker..."
+            echo "Docker not found. Installing Docker via official script..."
+            # get.docker.com configures Docker's apt repo and installs
+            # docker-ce, the CLI, containerd, buildx, and the compose plugin
+            # together. The compose plugin is NOT in Ubuntu's default repos,
+            # so plain `apt-get install docker-compose-plugin` fails.
+            curl -fsSL https://get.docker.com | sudo sh
+          fi
+
+          # Ensure the compose plugin is present even if Docker was
+          # pre-installed from Ubuntu's repos without it.
+          if ! sudo docker compose version >/dev/null 2>&1; then
             if command -v apt-get >/dev/null 2>&1; then
               sudo apt-get update
-              sudo apt-get install -y docker.io docker-compose-plugin
-            else
-              echo "ERROR: Unsupported package manager; install Docker manually."
-              exit 1
+              sudo apt-get install -y docker-compose-plugin \
+                || sudo apt-get install -y docker-compose-v2 \
+                || true
             fi
           fi
 
