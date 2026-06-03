@@ -14,10 +14,16 @@ RUN apt-get update && apt-get install -y  --no-install-recommends\
 
 RUN pip install --upgrade pip uv
 
+# Install dependencies only (cached layer). --no-install-project skips
+# building the local package here, which would fail because README.md
+# (referenced by pyproject's `readme` field) isn't copied yet.
 COPY pyproject.toml uv.lock /app/
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --no-install-project
 
 COPY . /app
+
+# Now the full source (incl. README.md) is present, install the project.
+RUN uv sync --frozen --no-dev
 
 EXPOSE 8000 8501
 
