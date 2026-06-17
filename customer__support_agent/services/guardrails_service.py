@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, asdict, field
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -13,8 +14,7 @@ from guardrails.validators import(
     register_validator
 )
 
-from customer_support_agent.core.settings import Settings
-from customer_support_agent.observability.tracer import NoOpTracer,Tracer
+from customer__support_agent.core.settings import Settings
 
 try :
     from guardrails.hub import DetectPII as _HubDetectPII
@@ -30,6 +30,14 @@ try:
     from guardrails.hub import RestrictToTopic as _HubRestrictToTopic
 except Exception:
     _HubRestrictToTopic = None
+
+class NoOpTracer:
+    """Tracer that discards spans; used when no real tracer is provided."""
+
+    @contextmanager
+    def start_span(self, name: str, **kwargs: Any):
+        yield {}
+
 
 _PII_REPLACEMENTS = {
     "CARD_NUMBER": "<CARD_NUMBER>",
@@ -62,7 +70,7 @@ def _normalize_pii_tokens(text:str) -> tuple[str,list[str]]:
 @register_validator(name="csa/account_number-redact", data_type="string")
 class AccountNumberValidator(Validator):
     PATTERN = re.compile(
-        r"(?:(?:account|a/c)(?:number | no\.?)?[:\s-]*)\b\d{8,18}\b",
+        r"(?:account|a/c)\s*(?:number|no\.?)?[:\s-]*\b\d{8,18}\b",
         flags=re.IGNORECASE,
     )
 
@@ -123,13 +131,13 @@ class ToxicLanguageRegexValidator(Validator):
     PATTERNS: list[re.Pattern[str]] = [
         re.compile(p, flags=re.IGNORECASE)
         for p in (
-            r"\bidiot\b"
-            r"\bmoron\b"
-            r"\bstupid\b"
-            r"\bshut up\b"
-            r"\bdamn you\b"
-            r"\bhell with you\b"
-            r"\bfool\b"
+            r"\bidiot\b",
+            r"\bmoron\b",
+            r"\bstupid\b",
+            r"\bshut up\b",
+            r"\bdamn you\b",
+            r"\bhell with you\b",
+            r"\bfool\b",
         )
     ]
 
@@ -141,7 +149,7 @@ class ToxicLanguageRegexValidator(Validator):
         if not matches:
             return PassResult()
         return FailResult(
-            error_messsage="Draft contains hostile or abusive language",
+            error_message="Draft contains hostile or abusive language",
             metadata={"matches": sorted(set(matches))},
         )
 
@@ -151,15 +159,14 @@ class ForbiddenPhrasesValidator(Validator):
     PATTERNS: list[re.Pattern[str]] = [
         re.compile(p,flags=re.IGNORECASE)
         for p in(
-            r"\bguaranteed return\b"
-            r"\bguaranteed profit\b"
-            r"\bfree money\b"
-            r"\b100%\s+safe\b"
-            r"\brisk[- ]free\b"
-            r"\bzero[- ]risk\b"
-            r"\bcan(?:not|'t)? lose\b"
-            r"\bdouble your money\b"
-
+            r"\bguaranteed return\b",
+            r"\bguaranteed profit\b",
+            r"\bfree money\b",
+            r"\b100%\s+safe\b",
+            r"\brisk[- ]free\b",
+            r"\bzero[- ]risk\b",
+            r"\bcan(?:not|'t)? lose\b",
+            r"\bdouble your money\b",
         )
     ]
 
@@ -181,7 +188,7 @@ class ForbiddenPhrasesValidator(Validator):
 @dataclass
 class GuardrailResult:
     passed: bool
-    sanitized:str
+    sanitized_text: str
     violations: list[dict[str,Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str,Any]:
@@ -201,43 +208,42 @@ class GuardrailsService:
     _BANKING_KEYWORDS = {
         "account",
         "atm",
-        "balance"
-        "bank"
-        "banking"
-        "billing"
-        "branch"
-        "card"
-        "cash"
-        "charge"
-        "charges"
-        "customer"
-        "debit"
-        "deposit"
-        "fee"
-        "fees"
-        "ifsc"
-        "interest"
-        "kyc"
-        "loan"
-        "minimum balance"
-        "net banking"
-        "net banking"
-        "otp"
-        "passboook"
-        "payment"
-        "pin"
-        "plan"
-        "priority queue"
-        "refund"
-        "savings"
-        "sla"
-        "support"
-        "ticket"
-        "transaction"
-        "update my email"
-        "update my mobile"
-        "withdraw"
-        "withdrawal"
+        "balance",
+        "bank",
+        "banking",
+        "billing",
+        "branch",
+        "card",
+        "cash",
+        "charge",
+        "charges",
+        "customer",
+        "debit",
+        "deposit",
+        "fee",
+        "fees",
+        "ifsc",
+        "interest",
+        "kyc",
+        "loan",
+        "minimum balance",
+        "net banking",
+        "otp",
+        "passbook",
+        "payment",
+        "pin",
+        "plan",
+        "priority queue",
+        "refund",
+        "savings",
+        "sla",
+        "support",
+        "ticket",
+        "transaction",
+        "update my email",
+        "update my mobile",
+        "withdraw",
+        "withdrawal",
     }
 
     _OFF_TOPIC_KEYWORDS =  {
@@ -270,7 +276,7 @@ class GuardrailsService:
 
 
     def _setup_validators(self) -> None:
-        self._pii_validators.append(AccountNumberValidator(on_failt="fix"))
+        self._pii_validators.append(AccountNumberValidator(on_fail="fix"))
 
         if _HubDetectPII is not None:
             try:
@@ -305,11 +311,11 @@ class GuardrailsService:
                     valid_topics=[
                         "banking",
                         "account servicing",
-                        "atm"
-                        "card"
-                        "kyc"
-                        "fees and charges"
-                        "support ticket"
+                        "atm",
+                        "card",
+                        "kyc",
+                        "fees and charges",
+                        "support ticket",
                     ],
                     invalid_topics=[
                         "poetry",
@@ -400,7 +406,7 @@ class GuardrailsService:
         )
 
 
-    def sanitize_text(self,text:str) -> tuple[str, list[str,Any]]:
+    def sanitize_text(self,text:str) -> tuple[str, list[dict[str, Any]]]:
         source = str(text or "")
         if not self._enabled:
             return source,[]
@@ -422,8 +428,19 @@ class GuardrailsService:
                     count = len(inferred)
                 else:
                     sanitized_text, _ =_normalize_pii_tokens(sanitized_text)
-                    all_entities.extend(entity_types)
+                all_entities.extend(entity_types)
                 total_count += count or len(entity_types)
+
+        violations: list[dict[str, Any]] = []
+        if all_entities or total_count:
+            violations.append(
+                {
+                    "type": "pii_redaction",
+                    "entities": sorted(set(all_entities)),
+                    "count": total_count,
+                }
+            )
+        return sanitized_text, violations
 
     def _classify_scope(self,text:str) -> dict[str, str]:
         lowered = f" {text.lower()} "
@@ -510,4 +527,4 @@ class GuardrailsService:
             self._classifier_llm = None
         return self._classifier_llm
 
-TracerLike = Tracer | NoOpTracer
+TracerLike = NoOpTracer
