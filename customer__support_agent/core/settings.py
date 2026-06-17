@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     openai_api_key : str =""
     google_api_key : str =""
     google_embedding_model : str = "gemini-embedding-001"
+    enable_local_embeddings : bool = False
 
     workspace_dir : Path = Path(__file__).resolve().parents[2]
     data_dir: Path = Path("data")
@@ -37,6 +38,11 @@ class Settings(BaseSettings):
     api_port: int = 8000
 
     dashboard_api_url : str ="http://localhost:8000"
+    guardrails_enabled : bool = True
+    trace_enabled: bool = True
+    trace_dir: Path = Path("data/traces")
+
+
     def resolve(self, path: Path) -> Path:
         """ Resolve relative paths against the project root"""
         return path if path.is_absolute() else self.workspace_dir / path
@@ -78,6 +84,10 @@ class Settings(BaseSettings):
             return "gemini-embedding-001"
         return model
 
+    @property
+    def trace_dir_path(self) -> Path:
+        return self.resolve(self.trace_dir)
+
 
 @lru_cache
 def get_settings() -> Settings:
@@ -93,5 +103,6 @@ def ensure_directories(settings: Settings | None = None) -> None:
         config.chroma_rag_path(),
         config.chroma_mem0_path,
         config.knowledge_base_path,
+        config.trace_dir_path
     ) :
         path.mkdir(parents=True, exist_ok=True)
