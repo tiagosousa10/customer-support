@@ -15,12 +15,16 @@ from customer__support_agent.integrations.memory.mem0_store import (
 )
 from customer__support_agent.integrations.rag.chroma_kb import KnowledgeBaseService
 from customer__support_agent.integrations.tools.support_tools import get_support_tools
+from customer__support_agent.observability import NoOpTracer,Tracer
+from customer__support_agent.services.guardrails_service import GuardrailsService
 
 class SupportCopilot:
-    def __init__(self,settings: Settings):
+    def __init__(self,settings: Settings, guardrails: GuardrailsService | None = None, tracer: Tracer | NoOpTracer | None = None):
         if not settings.groq_api_key:
             raise RuntimeError("GROQ API key is not set. Please set it in the .env file.")
         self._settings = settings
+        self._guardrails = guardrails or GuardrailsService(settings=settings)
+        self._tracer = tracer or NoOpTracer()
         self._llm = ChatGroq(
             model=settings.groq_model,
             groq_api_key=settings.groq_api_key,
@@ -44,7 +48,37 @@ class SupportCopilot:
         self.rag = KnowledgeBaseService(settings=self._settings)
 
     def generate_draft(self, ticket:dict[str,Any], customer:dict[str,Any]) -> dict[str,Any]:
-        query = f"{ticket['subject']}\n{ticket['description']}"
+
+        input_result = self._guardrails.check_input(
+            f"{ticket['subject']}\n{ticket['description']}"
+        )
+
+        guardrail_outcomes: dict[str, Any] = {
+            "input": input_result.to_dict(),
+            "output": None,
+        }
+
+        if not input_result.passed:
+            context_used = self._build_context(
+                ticket=ticket,
+                customer=customer,
+                memory_hits=[],
+                kb_hits=[],
+                tool_calls=[],
+                guardrail_outcomes=guardrail_outcomes,
+            )
+            context_used.setdefault("errors", []).append(
+                "Input guardrail blocked draft generation before the model call."
+            )
+            context_used["agent_runtime"] = "guardrail_blocked"
+            return {
+                "draft": self._guardrails.ESCALATION_MESSAGE,
+                "context": context_used,
+            }
+
+        safe_ticket= self._build_guarded_ticket(ticket)
+        trace_customer = self._build_trace_customer(customer)
+        query = input_result.sanitized_text
         customer_email = customer["email"]
 
         memory_hits= self._search_memory_scopes(
@@ -56,37 +90,120 @@ class SupportCopilot:
 
         kb_hits = self.rag.search(query=query,top_k=self._settings.rag_top_k)
 
-        system_prompt = self._build_system_prompt(memory_hits=memory_hits,kb_hits=kb_hits)
-        user_prompt=self._build_user_prompt(ticket=ticket,customer=customer)
-
-        agent_result = self._agent.invoke(
-            {
-                "messages": [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=user_prompt),
-                ]
-            },
-            config={
-                "configurable": {
-                    "thread_id": self._thread_id_for_ticket(ticket=ticket,customer=customer),
-                },
-                "recursion_limit":40,
-            }
+        requires_tool_checks = self._requires_tool_checks(
+            ticket=safe_ticket
         )
-        draft_text,tool_calls = self._extract_agent_draft_and_tool_calls(agent_result)
-        used_fallback=False
-        if not draft_text:
-            draft_text = self._fallback_generate_text(
-                ticket=ticket,
+        prefetched_tool_calls = (
+            self._prefetch_tool_calls(
+                ticket=safe_ticket,
                 customer=customer,
+            )
+            if requires_tool_checks
+            else []
+        )
+
+
+        system_prompt = self._build_system_prompt(memory_hits=memory_hits,kb_hits=kb_hits)
+        user_prompt=self._build_user_prompt(ticket=ticket,customer=customer, tool_calls=prefetched_tool_calls)
+        trace_user_promt = self._build_user_prompt(
+            ticket=safe_ticket,
+            customer=trace_customer,
+            tool_calls=prefetched_tool_calls,
+        )
+
+
+        draft_text = ""
+        agent_error:str | None = None
+        tool_calls: list[dict[str,Any]] = list(prefetched_tool_calls)
+        used_direct_llm = False
+
+        if tool_calls:
+            draft_text = self._direct_generate_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                trace_user_promt = trace_user_promt,
+                ticket=safe_ticket,
+                kb_hits=kb_hits,
+                tool_calls=tool_calls,
+                guardrail_outcomes=guardrail_outcomes,
+            )
+        elif requires_tool_checks:
+            with self._tracer.start_span(
+                "agent_invoke",
+                ticket_id=ticket.get("id"),
+                thread_id=self._thread_id_for_ticket(ticket=ticket,customer=customer),
+            ) as span:
+                span["prompt"] = {
+                    "system": system_prompt,
+                    "user": user_prompt,
+                }
+                span["knowledge_hits"] = self._sanitize_for_trace(kb_hits)
+
+            try:
+                agent_result = self._agent.invoke(
+                    {
+                        "messages": {
+                            SystemMessage(content=system_prompt),
+                            HumanMessage(content=user_prompt),
+                        }
+                    }
+                    config= {
+                        "configurable": {
+                            "thread_id": self._thread_id_for_ticket(ticket=ticket,customer=customer),
+                        },
+                        "recursion_limit": 40,
+                    }
+                )
+                draft_text, tool_calls = self._extract_agent_draft_and_tool_calls(
+                    agent_result=agent_result,
+                )
+            except Exception as exc:
+                agent_error = f"{type(exc).__name__}: {exc}"
+                span[__name__] = agent_error
+                draft_text = ""
+                tool_calls = []
+                span["tool_calls"] = self._sanitize_for_trace(tool_calls)
+
+            if draft_text:
+                draft_text, output_text = self._apply_output_guardrails(draft_text)
+                guardrail_outcomes["output"] = output_text
+                span["response"] = draft_text
+                span["guardrail_outcomes"] = guardrail_outcomes
+
+        else:
+            draft_text = self._direct_generate_text(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                trace_user_promt = trace_user_promt,
+                ticket=safe_ticket,
+                kb_hits=kb_hits,
+                tool_calls=tool_calls,
+                guardrail_outcomes=guardrail_outcomes,
+            )
+
+            used_direct_llm = bool(draft_text)
+
+        used_fallback=False
+        if requires_tool_checks and not draft_text:
+            draft_text = self._fallback_generate_text(
+                ticket=safe_ticket,
+                customer=customer,
+                trace_customer=trace_customer,
                 memory_hits=memory_hits,
                 kb_hits=kb_hits,
                 tool_calls=tool_calls,
+                guardrail_outcomes=guardrail_outcomes,
             )
             used_fallback=True
         if not draft_text:
             draft_text = self._deterministic_fallback(ticket=ticket,customer=customer,tool_calls=tool_calls)
             used_fallback=True
+            guardrail_outcomes["output"] = {
+                "passed":True,
+                "sanitized_text":draft_text,
+                "violations":[],
+                "pii_redacted": False,
+            }
 
         context_used = self._build_context(
             ticket=ticket,
@@ -94,12 +211,25 @@ class SupportCopilot:
             memory_hits=memory_hits,
             kb_hits=kb_hits,
             tool_calls=tool_calls,
+            guardrail_outcomes=guardrail_outcomes,
         )
         if self._memory_error:
             context_used.setdefault("errors",[]).append(f"Memory disabled: {self._memory_error}")
         if used_fallback:
             context_used.setdefault("errors",[]).append("Primary tool-call response had empty content; fallback synthesis was used.")
-        context_used["agent_runtime"] = "langchain_create_agent"
+            if agent_error:
+                context_used.setdefault("errors",[]).append(
+                    f"Agent invocation raised: {agent_error}"
+                )
+        if guardrail_outcomes.get("output") and not guardrail_outcomes["output"]["passed"]:
+            context_used.setdefault("errors",[]).append(
+                "Output guardrail replaced the model response with a deterministic escalation draft."
+            )
+        context_used["agent_runtime"] = (
+            "langchain_create_agent"
+            if require_tool_checks
+            else "direct_llm_context_synthesis"
+        )
 
         return {
             "draft": draft_text,
@@ -277,20 +407,45 @@ class SupportCopilot:
         return(
             "You are an AI copilot for customer support agents."
             "Write concise, empathetic, and actionable draft replies"
-            "If needed, call tools to verify plan, billing, or ticket load before finalizing. \n\n"
+            "Only call tools when the ticket explicity asks about plan benefits, support priority/SLA, "
+            "billing/account-specific status, or open ticket load."
+            "For general backing FAQ or policy tickets, answer from the knowledge base alone. \n\n"
             "Customer Memory Context:\n"
             f"{self._format_memory(memory_hits)}\n\n"
             "Knowledge Base Context:\n"
             f"{self._format_kb(kb_hits)}\n\n"
             "Output rules:\n"
             "1) Start with empathy and direct ackownledgement\n"
-            "2) Provide clear next steps or resolution path.\n"
-            "3)Reference KB/tool facts when relevant, without exposing internal chain-of-thoughts.\n"
-            "4) Keep response under 180 words, unless more detail is necessary."
+            "2) Only state facts that are directly supported by the KB or tool outputs \n."
+            "3) If the context does not provide a specific next step, keep follow-up language generir rather than a direct answer\n"
+            "4) Mention plan/SLA/tool details only whenn they are directly relevant to the customer's question\n"
+            "5) Keep response under 180 words unless more details is necessary."
         )
 
+    def _require_tool_checks(self,ticket:dict[str,Any]) -> bool:
+        pass
+
     @staticmethod
-    def _build_user_prompt(ticket:dict[str,Any], customer: dict[str,Any]) -> str:
+    def _tool_names_for_tickets(ticket:dict[str,Any]) -> list[str]:
+        pass
+    @staticmethod
+    def _prefetch_tool_calls(self, ticket:dict[str,Any], customer:dict[str,Any]) -> list[dict[str,Any]]:
+
+    @staticmethod
+    def _build_user_prompt(ticket:dict[str,Any], customer: dict[str,Any], tool_calls: list[dict[str,Any]] | None = None) -> str:
+        verified_findings = ""
+
+        if tool_calls:
+            summaries = [
+                str(item.get("summary") or item.get("output_text") or "").strip()
+                for item in tool_calls
+                if str(item.get("summary") or item.get("output_text") or "").strip()
+            ]
+            if summaries:
+              verified_findings = (
+                  "\n\nVerified Findings:\n"
+                  + "\n".join(f"- {item}" for item in summaries)
+              )
         return(
             f"Customer: {customer.get('name') or 'Unknown'} ({customer.get('email') or 'Unknown'})\n"
             f"Company: {customer.get('company') or 'Unknown'}\n"
@@ -298,7 +453,10 @@ class SupportCopilot:
             f"Ticket Priority: {ticket.get('priority', 'medium')}\n"
             f"Ticket Description:\n{ticket['description']}\n\n"
             "Create a draft response for the support agent."
-            "Use tools when the ticket likely needs billing, plan, or account-level checks"
+            "Use tools only if the customer explicitly asks about plan priority/SLA, plan benifits, "
+            "billing/account-specific status, or open ticket load."
+            "Otherwise answer directly from the KB context."
+            f"{verified_findings}"
         )
 
     @staticmethod
