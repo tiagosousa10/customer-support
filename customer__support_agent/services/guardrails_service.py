@@ -7,12 +7,27 @@ from dataclasses import dataclass, asdict, field
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 
-from guardrails.validators import(
-    FailResult,
-    PassResult,
-    Validator,
-    register_validator
-)
+try:
+    from guardrails.validators import(
+        FailResult,
+        PassResult,
+        Validator,
+        register_validator
+    )
+except ModuleNotFoundError:
+    class PassResult:
+        pass
+
+    class FailResult:
+        def __init__(
+            self,
+            error_message:str,
+            fix_value: Any | None = None,
+            metadata: dict[str,Any] | None = None,
+        ) -> None:
+            self.error_message = error_message
+            self.fix_value = fix_value
+            self.metadata = metadata or {}
 
 from customer__support_agent.core.settings import Settings
 
