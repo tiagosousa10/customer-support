@@ -146,7 +146,7 @@ class SupportCopilot:
                             SystemMessage(content=system_prompt),
                             HumanMessage(content=user_prompt),
                         }
-                    }
+                    },
                     config= {
                         "configurable": {
                             "thread_id": self._thread_id_for_ticket(ticket=ticket,customer=customer),
@@ -423,13 +423,114 @@ class SupportCopilot:
         )
 
     def _require_tool_checks(self,ticket:dict[str,Any]) -> bool:
-        pass
+        return bool(self._tool_names_for_tickets(ticket))
 
     @staticmethod
     def _tool_names_for_tickets(ticket:dict[str,Any]) -> list[str]:
-        pass
+        text = f"{ticket.get('subject','')}\n{ticket.get('description','')}".lower()
+        tool_names: list[str] = []
+        plan_markers = (
+            "plan",
+            "priority",
+            "sla",
+            "fast support",
+            "response priority",
+            "support tier",
+            "support level",
+        )
+        load_markers = (
+            "open_ticket",
+            "ticket load",
+            "multiple tickets",
+        )
+        if any(marker in text for marker in plan_markers):
+            tool_names.append("lookup_customer_plan")
+        if any(marker in text for marker in load_markers):
+            tool_names.append("lookup_open_ticket_load")
+        return list(dict.fromkeys(tool_names))
+
     @staticmethod
     def _prefetch_tool_calls(self, ticket:dict[str,Any], customer:dict[str,Any]) -> list[dict[str,Any]]:
+        tool_calls: list[dict[str,Any]] = []
+        arguments = {"customer_email": customer["email"]}
+        for tool_name in self._tool_names_for_tickets(ticket):
+            tool_calls.append(self._invoke_tool_for_trace(tool_name,arguments))
+            return tool_calls
+
+
+    def _invoke_tool_for_trace(self,tool_name:str,arguments:dict[str,Any]) -> dict[str,Any]:
+        trace: dict[str,Any] = {
+            "tool_name": tool_name,
+            "tool_call_id": f"preftech::{tool_name}",
+            "arguments": arguments,
+        }
+        tool = next ((item for item in self._tools if getattr(item,"name") == tool_name),None)
+        if tool is None:
+            trace.update(
+                {
+                    "status": "error",
+                    "summary": f"Tool '{tool_name}' is not available",
+                    "output": None,
+                    "output_text": f"Tool '{tool_name}' is not available",
+                }
+            )
+            return trace
+
+        try:
+            raw_output = tool.invoke(arguments)
+            output_text = self._extract_content(raw_output)
+            parsed_output, output_text = self._parse_tool_output(output_text)
+            trace.update(
+                {
+                    "status": "ok",
+                    "summary": self._tool_summary(parsed_output, output_text),
+                    "output": parsed_output,
+                    "output_text": output_text,
+                }
+            )
+            return trace
+        except Exception as exc:
+            trace.update(
+                {
+                    "status": "error",
+                    "summary": f"Tool '{tool_name}' failed: {exc}",
+                    "output": None,
+                    "output_text": str(exc),
+                }
+            )
+            return trace
+
+    def _build_guarded_ticket(self, ticket: dict[str,Any]) -> dict[str,Any]:
+        safe_subject, _ = self._guardrails.sanitize_text(str(ticket.get("subject") or ""))
+        safe_description,_= self._guardrails.sanitize_text(str(ticket.get("description") or ""))
+        return {
+            **ticket,
+            "subject": safe_subject,
+            "description": safe_description
+        }
+
+    def _build_trace_customer(self, customer: dict[str,Any]) -> dict[str,Any]:
+        safe_email,_ = self._guardrails.sanitize_text(str(customer.get("email") or ""))
+        return {
+            **customer,
+            "email": safe_email
+        }
+
+    def _apply_output_guardrails(self, text:str) -> tuple[str, dict[str,Any]]:
+        result = self._guardrails.check_output(text)
+        if not result.passed:
+            return self._guardrails.ESCALATION_MESSAGE, result.to_dict()
+        return result.sanitized_text, result.to_dict()
+
+    def _sanitize_for_trace(self, value: Any) -> Any:
+        if isinstance(value,str):
+            sanitized,_ = self._guardrails.sanitize_text(value)
+            return sanitized
+        if isinstance(value,list):
+            return[self._sanitize_for_trace(item) for item in value]
+        if isinstance(value,dict):
+            return {key: self._sanitize_for_trace(value) for key,value in value.items()}
+        return value
 
     @staticmethod
     def _build_user_prompt(ticket:dict[str,Any], customer: dict[str,Any], tool_calls: list[dict[str,Any]] | None = None) -> str:
@@ -570,6 +671,7 @@ class SupportCopilot:
         memory_hits: list[dict[str,Any]],
         kb_hits: list[dict[str,Any]],
         tool_calls: list[dict[str,Any]],
+        guardrail_outcomes: dict[str,Any] | None = None,
     ) -> dict[str,Any]:
         knowledge_sources = self._unique_ordered(
             [str(item.get("source")) for item in kb_hits if item.get("source")]
@@ -610,6 +712,7 @@ class SupportCopilot:
             "memory_hits": memory_hits,
             "knowledge_hits": kb_hits,
             "tool_calls": tool_calls,
+            "guardrail_outcomes": guardrail_outcomes or {},
         }
 
     @staticmethod
@@ -682,9 +785,11 @@ class SupportCopilot:
         self,
         ticket: dict[str,Any],
         customer: dict[str,Any],
+        trace_customer: dict[str,Any],
         memory_hits: list[dict[str,Any]],
         kb_hits: list[dict[str,Any]],
         tool_calls: list[dict[str,Any]],
+        guardrail_outcomes: dict[str, Any]
     ) -> str:
         tool_summaries = [
            self._trim_text(item.get("summary") or item.get("output_text", ""))
@@ -699,6 +804,9 @@ class SupportCopilot:
 
         fallback_system = (
             "You are an AI Support copilot. Produce only the final customer-facing draft reply."
+            "Ground every factual statement in the provided knowledge and tool context."
+            "Do not invent unsupported process steps or timelines."
+            "Only mention tool findings when they are directly relevant to the customer's question."
             "No tool calls."
         )
         fallback_user = (
@@ -712,17 +820,52 @@ class SupportCopilot:
             f"{chr(10).join('- '+ item for item in kb_summaries) if kb_summaries else '- none'}\n\n"
             "Tool findings:\n"
             f"{chr(10).join('- '+ item for item in tool_summaries) if tool_summaries else '- none'}\n\n"
-            "Write concise, empathetic draft with clear next steps."
+            "Write concise, empathetic draft ."
+            "Answer the customer's actual question first, and only include next steps that are directly supported by the context."
         )
 
+        trace_fallback_user = (
+            f"Customer: {trace_customer.get('name') or 'Unknown'}({trace_customer.get('email') or 'Unknown'})\n"
+            f"Company: {trace_customer.get('company') or 'Unknown'}\n"
+            f"Ticket subject: {ticket.get('subject','')}\n"
+            f"Ticket description:\n{ticket.get('description','')}\n\n"
+            "Memory highlights:\n"
+            f"{chr(10).join('- '+ item for item in memory_summaries) if memory_summaries else '- none'}\n\n"
+            "Knowledge base highlights:\n"
+            f"{chr(10).join('- '+ item for item in kb_summaries) if kb_summaries else '- none'}\n\n"
+            "Tool findings:\n"
+            f"{chr(10).join('- '+ item for item in tool_summaries) if tool_summaries else '- none'}\n\n"
+            "Write concise, empathetic draft ."
+            "Answer the customer's actual question first, and only include next steps that are directly supported by the context."
+        )
+
+
         try:
-            response = self._llm.invoke(
-                [
-                    SystemMessage(content=fallback_system),
-                    HumanMessage(content=fallback_user),
-                ]
-            )
-            return self._extract_content(response).strip()
+           with self._tracer.start_span(
+               "draft_fallback_invoke",
+               ticket_id=ticket.get("id"),
+           ) as span:
+               span["prompt"] = {
+                   "system": fallback_system,
+                   "user": trace_fallback_user,
+               }
+               span["knowledge_hits"] = self._sanitize_for_trace(kb_hits)
+               span["tool_calls"] = self._sanitize_for_trace(tool_calls)
+
+               response = self._llm.invoke(
+                   [
+                       SystemMessage(content=fallback_system),
+                       HumanMessage(content=fallback_user),
+                   ]
+               )
+
+               draft_text = self.extract_content(response).strip()
+               if draft_text:
+                   draft_text, output_result = self._apply_output_guardrails(draft_text)
+                   guardrail_outcomes["output"] = output_result
+                   span["response"] = draft_text
+                   span["guardrail_outcomess"] = guardrail_outcomes
+               return draft_text
         except Exception:
             return ""
 
@@ -754,3 +897,42 @@ class SupportCopilot:
             "Next, we will continue investigating and share an update with concrete steps shortly.\n\n"
             "Best,\nSupport Team"
         )
+
+    def _direct_generate_text(
+        self,
+        system_promt:str,
+        user_prompt:str,
+        trace_user_prompt:str,
+        ticket: dict[str,Any],
+        kb_hits: list[dict[str,Any]],
+        tool_calls: list[dict[str,Any]],
+        guardrail_outcomes: dict[str,Any] | None = None,
+    ) -> str:
+        try:
+            with self._tracer.start_span(
+                "draft_direct_invoke",
+                ticket_id=ticket.get("id"),
+            ) as span:
+                span["prompt"] = {
+                    "system": system_promt,
+                    "user": user_prompt,
+                }
+                span["knowledge_hits"] = self._sanitize_for_trace(kb_hits)
+                span["tool_calls"] = self._sanitize_for_trace(tool_calls)
+                response = self._llm.invoke(
+                    [
+                        SystemMessage(content=system_promt),
+                        HumanMessage(content=user_prompt),
+                    ]
+                )
+                draft_text = self._extract_content(response).strip()
+                if draft_text:
+                    draft_text, output_result = self._apply_output_guardrails(draft_text)
+                    guardrail_outcomes["output"] = output_result
+                    span["response"] = draft_text
+                    span["guardrail_outcomes"] = guardrail_outcomes
+
+                return draft_text
+
+        except Exception:
+            return ""
